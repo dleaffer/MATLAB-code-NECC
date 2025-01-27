@@ -1,0 +1,927 @@
+% motion_detector_master_script  % modified by DL 1-11-25
+%% Introduction
+% This example will show how to create a simple, yet sensitive motion
+% detector using a photoresistor and an Arduino controlled by the MATLAB
+% Support Package for Arduino Hardware. A photoresistor is a variable resistor
+% that responds to the intensity of incident light, so the motion detector
+% will be sensitive to motion that causes lighting changes for the
+% photoresistor.
+%
+% A program written in MATLAB will use commands from the support
+% package to read in analog voltages from an Arduino pin. As voltage
+% readings are collected in MATLAB, they are associated with a timestamp to
+% maintain a comprehensive record. The combined voltage and time data is
+% then plotted and analyzed in real-time to determine if motion is
+% detected. The code presented here utilizes a combination of algorithms to
+% detect motion, but there are numerous other machine learning and data
+% analysis algorithms that could be applied.
+% 
+% While the motion detector is running, the MATLAB program stores each
+% voltage reading along with a corresponding timestamp. This allows the
+% user to process a complete set of data in MATLAB after the recording is
+% finished. This article shares the results of several post-recording
+% motion detection and analysis algorithms that are provided in the
+% analysis code.
+
+
+
+%% Required Hardware
+% * Arduino board or clone
+% * USB connector
+% * 1 Photoresistor
+% * 10 kOhm resistor
+% * Several wires
+% * Small Breadboard
+
+
+
+%% Task 1 - Connect the Arduino to MATLAB
+% To connect the Arduino to MATLAB, you need to install the MATLAB Support
+% Package for Arduino Hardware. This support package is available for
+% MATLAB releases R2014b and higher and can be accessed using the Support
+% Package Installer. This installer can be opened from the MATLAB Toolstrip
+% under *Add-Ons -> Get Hardware Support Packages* or by running
+% |*supportPackageInstaller*| in the Command Window. Once you have the
+% support package installed, follow the steps below to connect to your
+% Arduino.
+%
+% # Plug the Arduino into your computer using the USB cable.
+% # In MATLAB, initialize an Arduino object.
+
+% Inputs: Port ID (from your computer), Arduino board type
+myArduino = arduino('COM9','Uno');
+
+%% Task 2 - Test your MATLAB-Arduino Connection
+% NOT NEEDED 
+
+%% Task 3 - Make the Circuit
+% Note that like normal resistors, the photoresistor has no orientation –
+% we don’t have to worry about which way current flows through it. We’ll be
+% creating a simple voltage divider with our photoresistor.
+% 
+% # Using the breadboard, connect the photoresistor and a 10 kOhm resistor
+% in series.
+% # Connect the free side of the 10 kOhm resistor to a GND (ground) pin on
+% the Arduino.
+% # Connect free side of the photoresistor to the 5V (5 Volts) pin on the
+% Arduino.
+% # To allow us to monitor the voltage between the photoresistor and the 10
+% kOhm resistor, connect this point in the circuit to an analog input on the
+% Arduino using a wire. This will act as a potentiometer.
+%
+% <<Photoresistor Circuit Diagram.png>>
+
+
+
+%% Task 4 – Test your Circuit and Photoresistor
+% The next step is to test the circuit you’ve made to ensure that the
+% photoresistor is responding correctly to changing light conditions. The
+% script below shows how to configure the Arduino and retrieve voltage
+% readings from the photoresistor on an analog pin. Try covering the
+% photoresistor or turning on/off the lights while the script is running to
+% see how the photoresistor responds. Note if you run this MATLAB file with
+% your own hardware setup, you will get your own unique data and it will
+% be different from the next 2 plots shown in the published html version of
+% this example. The published version is based on data we collected and
+% used for the data analysis in the sections below.
+
+% Configure Arduino
+PHOTORESISTOR_PIN_NUMBER = 'A0';
+%myArduino.configureAnalogPin(PHOTORESISTOR_PIN_NUMBER,'Input');
+myArduino.configurePin(PHOTORESISTOR_PIN_NUMBER,'AnalogInput');
+% Initialize Variables
+readings = 750; % this should take 20-30 seconds DL: reduce to 500?
+times = zeros(readings,1);
+analogVoltageIn = zeros(readings,1);
+
+% Initialize a Figure and Axes
+figure;
+hold on;
+ylim([0,5]);
+title('Analog Voltage vs. Time');
+ylabel('Analog Voltage (Volts)');
+xlabel('Time (seconds)');
+scatterPlot = scatter(NaN(readings,1),NaN(readings,1),200,'.k');
+
+% Record and Display the Analog Voltage Readings in Real-Time
+tic;
+for r = 1:readings
+    times(r) = toc;
+    analogVoltageIn(r) = myArduino.readVoltage(PHOTORESISTOR_PIN_NUMBER);
+    scatterPlot.XData(r) = times(r);
+    scatterPlot.YData(r) = analogVoltageIn(r);
+end
+
+
+%% Photoresistor Theory
+% A photoresistor is a variable resistor that responds to the intensity of
+% incident light. The brighter the light is, the less resistance the
+% photoresistor provides. A simple voltage divider circuit where the
+% photoresistor is in series with a constant-valued resistor will
+% effectively convert changes in resistance to measureable changes in
+% voltage. MATLAB is used to read in these voltages from an analog pin on
+% the Arduino. As voltages are recorded by MATLAB, a program can correlate
+% each voltage to a corresponding light level. Even simple photoresistors
+% can be very sensitive, providing the full range of voltages (0-5V) for
+% the Arduino’s analog pin to read in. MATLAB will read in these voltages
+% rounded to the nearest 0.0049 volts because the analog signal is
+% converted into a 10-bit digital signal.
+% 
+% $$\frac{5Volts}{2^{10Bits}} = 0.0049Volts $$
+
+
+
+%% Task 5 - Calibrate Your Motion Detection Algorithm
+% Because the photoresistor has a high sensitivity, the motion
+% detecting algorithms will require calibration depending the surrounding
+% lighting conditions and how the motion detector is being used. The
+% program's lighting level descriptors will also need to be adjusted based
+% upon how sensitive you want this functionality to be.
+%
+% The provided motion detector MATLAB code (_Run_Motion_Detector.m_) applies three
+% types of calculations in real-time to determine if the current voltage reading
+% signifies motion. Each calculation is a simple way to quantify a
+% different type of variability within a small window of data. The
+% calculations are each compared to a corresponding threshold variable to
+% determine if the variability indicates motion. If any of the calculations
+% exceeds its corresponding threshold variable, the current voltage reading
+% is designated as showing motion. The threshold variables are directly
+% related to the sensitivity of the motion detector and should be
+% calibrated for each particular situation.
+%
+% Here are descriptions for each method:
+%
+% * Standard Deviation Method - calculates the standard deviation of all
+% points within the data window, using |*std(voltages)*|. This is a basic
+% calculation of variability between voltage readings.
+% * Difference Method - calculates the sum of the absolute values of the
+% differences between consecutive points using
+% |*sum(abs(diff(voltages)))*|. This is a calculation of the net change
+% between consecutive data points within a window of data.
+% * Slope Method - calculates a best-fit linear slope for a window of data.
+% Requires both the voltage readings and their corresponding timestamps.
+% 
+% For a descriptive analysis of the lighting conditions, the
+% _getLightingCondition_ function qualitatively describes the light
+% intensity at each voltage reading. This function should be calibrated and
+% extended to appropriately describe the light levels at the location of
+% your motion detector.
+
+% Input: Arduino object, recording time (seconds)
+Run_Motion_Detector(myArduino,30);
+
+
+%% Task 6 - Post-Recording Data Analysis
+% Many motion detectors are only designed to detect motion in real-time
+% because they are automating a particular task. This is a very common type
+% of motion detector, seen in approach-activated doors at airports and
+% grocery stores or motion-activated light switches in office buildings.
+% Using MATLAB, the motion detector built in this example can not only
+% detect motion in real-time, it can additionally record and compile the
+% sensor readings over an entire recording session.
+%
+% The _Run_Motion_Detector_ function automatically saves the unprocessed
+% analog voltages and timestamps to the base MATLAB workspace as the
+% variables _analogVoltage_ and _sensorTime_. Once saved in MATLAB, this
+% data can be passed to the _Analyze_Motion_Detector_Data_ function to
+% implement and compare various motion detection algorithms. The figure
+% below shows the results of the three motion detection algorithms as
+% applied to the complete dataset. The red data markers are characterized
+% as motion by all three methods. It is useful to see that some motion is
+% only detected by the Slope Method (shown with green markers), while other
+% motion is only detected by the Standard Deviation and/or Difference
+% Methods (shown with cyan markers). By using a combination of these three
+% methods to determine motion, the MATLAB motion detector can generate a
+% comprehensive record of motion.
+
+%load('RealTime Method Comparison Data');
+Analyze_Motion_Detector_Data(sensorTime,analogVoltage);
+ylim([1.5,4.5]);  % DL: was [3 4.5 ]adjust as needed for light levels
+
+
+
+%% Task 7 - Motion Categorization
+% Using MATLAB for the data processing, it is easy to isolate motion events
+% and characterize each one with several calculated parameters. Some simple
+% parameters that can be calculated include:
+% 
+% * Light Level Before a Motion Event
+% * Light Level After a Motion Event
+% * Average Light Level During a Motion Event
+% * Total Time for a Motion Event
+%
+% The _Categorize_Motion_Events_ function calculates these four parameters
+% for each motion event and uses them to qualitatively describe the
+% recorded motion. The descriptions are used to create useful labels on the
+% voltage plot. The motion labels consist of three text characters and are
+% positioned above the motion event they describe. The first character is a
+% plus, minus, or equals sign indicating whether the intensity of the
+% lighting increased (+), decreased (-), or stayed constant (=) around the
+% motion event. The next character is a letter that refers to a specific
+% type of motion. The motion types with corresponding letters are listed
+% below. The third character (if specified) indicates how the average
+% lighting during each motion event is related to the prior and following
+% light intensities, using the same plus, minus, and equals sign
+% identifiers as the first character.
+%
+% * G : Grand Motion (variable lighting occurs for more than 20 seconds)
+% * E : Extended Motion (variable lighting occurs for a few seconds)
+% * M : Major Lighting Change (lighting changes dramatically around event)
+% * C : Combination (variable lighting during AND around the event)
+% * L : Lighting Change (lighting changes slightly around event)
+% * T : Temporary Motion (no significant lighting change around event)
+%
+% If you are monitoring very specific types of motion, you can tighten
+% the constraints to get more accurate categorization, or use machine
+% learning techniques in MATLAB to program an automatically adjusting
+% motion detector.
+
+%load('Sample Motion Categorization Data');
+%Categorize_Motion_Events(categorizationTime,categorizationVoltage);
+Categorize_Motion_Events(sensorTime,analogVoltage)
+
+%% Application: Hallway Activity Monitor
+% Because our motion detector is sensitive to changes in light, it will
+% work best when the motion you want to capture corresponds with a sharp
+% increase or sharp decrease in the lighting conditions. One scenario that
+% works well to detect people is pointing the motion detector across a
+% hallway at a well-lit wall or light source. When people walk down the
+% hallway, there will be a sharp decrease in voltage as their shadow passes
+% over the photoresistor.
+% 
+% The plot below is representative of data you might collect from a hallway
+% motion detection monitor. The motion events are categorized using a
+% version of the _Categorize_Motion_Events_ function that was specifically
+% modified to analyze hallway data. The motion events categorized as only
+% changes in lighting (M or L) can be discarded as they most likely do not
+% indicate people passing through the hallway. This leaves nine events that
+% seem to indicate people. Further analysis could be done to calculate the
+% speed of the person walking or how many people were in a group by looking
+% at the length of the motion event.
+
+%load('Sample Hallway Motion Detector Data');
+%Categorize_Hallway_Events(hallwayTime,hallwayVoltage);
+Categorize_Hallway_Events(sensorTime,analogVoltage);
+%% Functions appear below
+%% Run_Motion_Detector(arduinoObj,endTime)
+% This function uses the analog voltage inputs from a photoresistor to
+% detect motion. The input arguments are an Arduino object and the length
+% of time you which to run the motion detector, in seconds.
+% 
+% To run the motion detector indefinitely, you can specify the endTime to
+% be infinite with inf. To stop the detector in this case, you'll need to
+% interrupt the program using Ctrl-C. All the data will be stored to the
+% base workspace where you can access it after the program stops.
+
+function Run_Motion_Detector(arduinoObj,endTime)
+
+
+%% Initializations & Setup
+
+% Configure the Arduino
+%PHOTORESISTOR_PIN_NUMBER = 0;
+PHOTORESISTOR_PIN_NUMBER = 'A0';
+%arduinoObj.configureAnalogPin(PHOTORESISTOR_PIN_NUMBER,'Input');
+arduinoObj.configurePin(PHOTORESISTOR_PIN_NUMBER,'AnalogInput');
+% Initialize Variables
+maxReadings = 172800; % a large arbitrary maximum
+times = zeros(maxReadings,1);
+analogVoltageIn = zeros(maxReadings,1);
+motionRecord = cell(0,4);
+
+% Setup the real-time plot
+figure;
+hold on;
+ylim([0,5]);
+title('Analog Voltage vs. Time');
+ylabel('Analog Voltage (Volts)');
+xlabel('Time (seconds)');
+scatterPlot = scatter(NaN(maxReadings,1),NaN(maxReadings,1),46,zeros(maxReadings,3),'.');
+
+%% Begin reading voltage form the Arduino
+% Until the endTime is reached, record the analog voltage readings form the
+% photoresistor. In real-time, determine if the current reading corresponds
+% to motion and display the data point accordingly.
+tic;
+for r = 1:maxReadings
+    times(r) = toc;
+    analogVoltageIn(r) = arduinoObj.readVoltage(PHOTORESISTOR_PIN_NUMBER);
+    
+    scatterPlot.XData(r) = times(r);
+    scatterPlot.YData(r) = analogVoltageIn(r);
+    
+    if isMotion(times(1:r),analogVoltageIn(1:r))
+        scatterPlot.CData(r,1) = 1; % color the marker red
+        motionRecord(end+1,:) = {datestr(now,'HH:MM:SS'),times(r), ...
+            analogVoltageIn(r),lightingCondition};
+        lightingCondition = '';
+    else
+        lightingCondition = getLightingCondition(analogVoltageIn(1:r));
+    end
+    
+    % Save the data to the base workspace so that it is accessible when the
+    % program completes or is manually stopped.
+    assignin('base','motionRecord',motionRecord);
+    assignin('base','analogVoltage',analogVoltageIn(1:r));
+    assignin('base','sensorTime',times(1:r));
+    
+    % Stop recording voltages after the specified endTime, in seconds.
+    if times(r) > endTime-.1
+        return;
+    end
+end
+
+
+%% Motion Detection Function
+% This function determines if motion is occurring in real-time. It may
+% require calibration depending on environment lighting and what motion
+% events you wish to capture.
+% 
+% * SPAN refers to the number of previous voltage measurements that will be
+% analyzed to detect motion. The sample rate of the analog voltage pin is
+% approximately 30-35 Hz, so 15 readings is approximately 1/2 a second.
+% 
+% * THRESHOLD refers to the minimum value for each calculated parameter for
+% a span of readings that will be considered motion. The minimum voltage
+% difference between analog voltage readings is 0.0049 Volts, so it is
+% useful to relate the thresholds to this value.
+
+    function motion = isMotion(times,voltages)
+        % SPAN variable
+        span = 15;
+        % THRESHOLD variables
+        stdThreshold = 3*.0049;
+        diffThreshold = span*.0049;
+        slopeThreshold = 0.05; % may need to comment out
+        %slopeMotion = polyfit(times(end-span:end),voltages(end-span:end), 1);
+        % Motion Detection Condition
+        
+        if length(voltages) > span
+            stdMotion = std(voltages(end-span:end)) > stdThreshold;
+            diffMotion = sum(abs(diff(voltages(end-span:end)))) > diffThreshold;
+            getSlope = polyfit(times(end-span:end),voltages(end-span:end), 1);
+            getSlope = getSlope(1)
+            slopeMotion = abs(getSlope) > slopeThreshold;
+            motion = stdMotion || diffMotion || slopeMotion;
+        else
+            motion = 0;
+        end
+    end
+
+
+%% Lighting Condition Descriptor Function
+% This function associates a descriptive string to the real-time lighting
+% condition. By calibrating and adding to the basic lighting conditions
+% used below, you can create a function that returns a useful assessment of
+% the environment you are monitoring motion in.
+% DL: adjust as needed for light levels to calibrate
+    function lightStr = getLightingCondition(voltages)
+        if voltages(end) > 4 % was 4
+            lightStr = 'Bright';
+        elseif voltages(end) > 3 % was 3
+            lightStr = 'Dim';
+        elseif voltages(end) > 1.5 % was 1.5
+            lightStr = 'Very Dim';
+        else
+            lightStr = 'Dark';
+        end
+    end
+
+
+end
+%%
+%% Analyze_Motion_Detector_Data(sensorTime,analogVoltage)
+% This function analyzes the data recorded by the Run_Motion_Detector
+% function. Three methods of motion detection are applied separately so
+% that the results of each can be compared.
+
+function Analyze_Motion_Detector_Data(sensorTime,analogVoltage)
+
+
+%% Use post-recording algorithms to detect motion
+% Using the complete set of recorded data, these algorithms look at past
+% and future readings to determine if the current reading indicates motion.
+
+figure;
+hold on;
+ylim([0,5]);
+title('Post-Recording Motion Detection');
+ylabel('Analog Voltage (Volts)');
+xlabel('Time (seconds)');
+scatterPlot = scatter(sensorTime,analogVoltage,46,zeros(length(sensorTime),3),'.');
+
+halfspan = 7;
+detectorResults = zeros(length(sensorTime),3);
+
+% Apply various motion detection methods
+StandardDeviationMethod(sensorTime,analogVoltage);
+DifferenceMethod(sensorTime,analogVoltage);
+SlopeMethod(sensorTime,analogVoltage); % DL commented out
+
+% Calculate an overall motion number for each point. The motion number for
+% a point contains information regarding which calculation methods showed
+% motion at that point.
+motionNumber = sum(detectorResults.*repmat([1,2,4],length(sensorTime),1),2);
+
+% Display useful information regarding the motion numbers
+for pt = 1:length(sensorTime)
+    switch motionNumber(pt)
+        case 0
+            % No Motion (marker remains black)
+        case {1,2,3}
+            % Standard Deviation and/or Difference Motion, No Slope Motion
+            scatterPlot.CData(pt,:) = [0,1,1]; % set marker to cyan
+        case 4
+            % Only Slope Motion
+            scatterPlot.CData(pt,:) = [0,1,0]; % set marker to green
+        otherwise
+            % Any other combination of Motion detected
+            scatterPlot.CData(pt,:) = [1,0,0]; % set marker to red
+    end
+end
+
+
+%% Standard Deviation method
+    function StandardDeviationMethod(time,voltage)
+        motionValue = zeros(length(time),1);
+        threshold = 3*.0049;
+        for r = halfspan+1:length(voltage)-halfspan
+            motionValue(r) = std(voltage(r-halfspan:r+halfspan))/threshold;
+            detectorResults(r,1) = motionValue(r)>1;
+        end
+    end
+
+
+%% Difference method
+    function DifferenceMethod(time,voltage)
+        motionValue = zeros(length(time),1);
+        threshold = (halfspan*2+1)*.0049;
+        for r = halfspan+1:length(voltage)-halfspan
+            motionValue(r) = sum(abs(diff(voltage(r-halfspan:r+halfspan))))/threshold;
+            detectorResults(r,2) = motionValue(r)>1;
+        end
+    end
+
+
+%% Slope method
+    function SlopeMethod(time,voltage)
+       motionValue = zeros(length(time),1);
+        threshold = .05;
+       for r = halfspan+1:length(voltage)-halfspan
+            getSlope = polyfit(time(r-halfspan:r+halfspan),voltage(r-halfspan:r+halfspan), 1);
+            getSlope = getSlope(1)
+            motionValue(r) = abs(getSlope)/threshold;
+           % motionValue(r) = abs(polyfit(time(r-halfspan:r+halfspan),voltage(r-halfspan:r+halfspan),1))/threshold;
+           detectorResults(r,3) = motionValue(r)>1;
+       end
+   end
+
+
+end
+%%
+%% Categorize_Motion_Events(time,voltage)
+% This function uses calculated parameters to qualitatively categorize each
+% motion event from the data collected by the Run_Motion_Detector function.
+% Depending on the application, the descriptions should be modified and the
+% parameter thresholds should be calibrated.
+
+function Categorize_Motion_Events(time,voltage)
+
+
+%% Initializations & Setup
+
+figure;
+figpos = get(gcf,'position');
+set(gcf,'position',[figpos(1),figpos(2),figpos(3)*2,figpos(4)*1.5]);
+hold on;
+ylim([0,5]);
+title('Motion Type Analysis and Categorization');
+ylabel('Analog Voltage (Volts)');
+xlabel('Time (seconds)');
+scatterPlot = scatter(time,voltage,46,zeros(length(time),3),'.');
+
+
+%% Identify the Span of each Motion Event
+% The variable motionSpans will keep track of when motion events "start" and
+% "end" in columns 1 and 2, respectively, using the index numbers.
+
+% (1) Apply basic motion detection
+motionValues = detectMotion(time,voltage);
+motionLogicals = sum(motionValues>1,2)>0;
+
+% (2) Determine the span of each basic motion event
+motionSpans = [0,0];
+for r = 1:length(time)
+    if motionLogicals(r)
+        if r == motionSpans(end,2)+1
+            motionSpans(end,2) = r;
+        else
+            motionSpans(end+1,:) = r;
+        end
+    end
+end
+motionSpans(1,:) = [];
+
+% (3) Compress motion events to remove non-critical points
+for m = 1:length(motionSpans(:,1))
+    % Start Adjustment
+    adj = 0;
+    while abs(voltage(motionSpans(m,1)-1)-voltage(motionSpans(m,1)+adj)) <= .0049
+        adj = adj+1;
+    end
+    motionSpans(m,1) = motionSpans(m,1)+adj;
+    % End Adjustment
+    adj = 0;
+    while abs(voltage(motionSpans(m,2)+1)-voltage(motionSpans(m,2)-adj)) <= .0049
+        adj = adj+1;
+    end
+    motionSpans(m,2) = motionSpans(m,2)-adj;
+end
+% Remove spans that were eliminated by the adjustments
+motionSpans(diff(motionSpans,1,2)<=0,:) = [];
+
+% (4) Combine motion events to increase clarity
+% Motion events with a small amount of time between them are combined,
+% making the categorization process more effective.
+timeThreshold = 0.1;
+for m = length(motionSpans(:,1)):-1:2
+    if time(motionSpans(m,1))-time(motionSpans(m-1,2)) < timeThreshold
+        motionSpans(m-1,2) = motionSpans(m,2);
+        motionSpans(m,:) = [];
+    end
+end
+
+% (5) Recolor the markers on the plot to indicate modified motion events in red
+for m = 1:length(motionSpans(:,1))
+    scatterPlot.CData(motionSpans(m,1):motionSpans(m,2),:) = repmat([1,0,0],length(motionSpans(m,1):motionSpans(m,2)),1);
+end
+
+
+%% Assign Identifiers to each Motion Event
+avgSpan = 7; % number of stable points to average
+motionDesc = cell(length(motionSpans(:,1)),5);
+for m = 1:length(motionSpans(:,1))
+    if motionSpans(m,1) > avgSpan && motionSpans(m,2) <= length(voltage)-avgSpan
+        
+        % calculate average before and after lighting
+        beforeLighting = mean(voltage(motionSpans(m,1)-avgSpan:motionSpans(m,1)-1));
+        afterLighting = mean(voltage(motionSpans(m,2)+1:motionSpans(m,2)+avgSpan));
+        
+        % lightingVariance is difference in lighting before and after an event
+        lightingVariance =  afterLighting - beforeLighting;
+        
+        % motionAverage is the mean of the lighting during a motion event
+        motionAverage = mean(voltage(motionSpans(m,1):motionSpans(m,2)));
+        
+        % motionLength is the total amount of time for a motion event in seconds
+        motionLength = time(motionSpans(m,2))-time(motionSpans(m,1));
+        
+        % Use the calculated parameters to associate the motion event with a category
+        if motionLength > 20
+            if lightingVariance > .015
+                motionDesc{m,1} = '+G    Grand Motion and Lighting Change';
+            elseif lightingVariance < -.015
+                motionDesc{m,1} = '-G    Grand Motion and Lighting Change';
+            else
+                motionDesc{m,1} = '=G    Grand Motion and No Lighting Change';
+            end
+        elseif motionLength > 2.5
+            if lightingVariance > .015
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+E-   Extended Positive Lighting Change and Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+E+   Extended Positive Lighting Change and Positive Motion';
+                else
+                    motionDesc{m,1} = '+E=   Extended Positive Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -.015
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-E+   Extended Negative Lighting Change and Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-E-   Extended Negative Lighting Change and Negative Motion';
+                else
+                    motionDesc{m,1} = '-E=   Extended Negative Lighting Change with No Motion';
+                end
+            else
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '=E+   Extended Positive Motion with No Lighting Change';
+                elseif motionAverage < beforeLighting
+                    motionDesc{m,1} = '=E-   Extended Negative Motion with No Lighting Change';
+                else
+                    motionDesc{m,1} = '=E=   Extended Motion with No Lighting Change';
+                end
+            end
+        else
+            if lightingVariance > 1
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+M-   Major Lighting Change with Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+M+   Major Lighting Change with Positive Motion';
+                else
+                    motionDesc{m,1} = '+M=   Major Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -1
+                 if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-M+   Major Lighting Change with Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-M-   Major Lighting Change with Negative Motion';
+                else
+                    motionDesc{m,1} = '-M=   Major Lighting Change with No Motion';
+                end
+            elseif lightingVariance > .015
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+C-   Combination of Positive Lighting Change and Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+C+   Combination of Positive Lighting Change and Positive Motion';
+                else
+                    motionDesc{m,1} = '+L=   Positive Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -.015
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-C+   Combination of Negative Lighting Change and Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-C-   Combination of Negative Lighting Change and Negative Motion';
+                else
+                    motionDesc{m,1} = '-L=   Negative Lighting Change with No Motion';
+                end
+            else
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '=T+   Temporary Positive Motion with No Lighting Change';
+                elseif motionAverage < beforeLighting
+                    motionDesc{m,1} = '=T-   Temporary Negative Motion with No Lighting Change';
+                else
+                    motionDesc{m,1} = '=T=   Temporary Motion with No Lighting Change';
+                end
+            end
+        end
+        
+        % Add the indicator characters to the plot
+        text(time(motionSpans(m,1)),4.6,motionDesc{m}(1:3));
+        motionDesc{m,2} = beforeLighting;
+        motionDesc{m,3} = afterLighting;
+        motionDesc{m,4} = motionAverage;
+        motionDesc{m,5} = motionLength;
+    end
+end
+
+% Save motionDescription to the base workspace for access
+assignin('base','motionDescription',motionDesc);
+
+
+
+%% Basic Motion Detection Function
+    function motionValues = detectMotion(time,voltage)
+        motionValues = zeros(length(time),3);
+        
+        % Halfspan
+        halfspan = 7;
+        
+        % Thresholds
+        stdThreshold = 3*.0049;
+        diffThreshold = (halfspan*2+1)*.0049;
+        slopeThreshold = .05;
+        for rd = halfspan+1:length(voltage)-halfspan
+            motionValues(rd,1) = std(voltage(rd-halfspan:rd+halfspan))/stdThreshold;
+            motionValues(rd,2) = sum(abs(diff(voltage(rd-halfspan:rd+halfspan))))/diffThreshold;
+            getSlope =polyfit(time(rd-halfspan:rd+halfspan),voltage(rd-halfspan:rd+halfspan),1);
+            motionValues(rd,3) = abs(getSlope(1))/slopeThreshold;
+        end
+    end
+
+
+end
+%%
+%% Categorize_Motion_Events(time,voltage)
+% This function uses calculated parameters to qualitatively categorize each
+% motion event from the data collected by the Run_Motion_Detector function.
+% Depending on the application, the descriptions should be modified and the
+% parameter thresholds should be calibrated.
+
+function Categorize_Hallway_Events(time,voltage)
+
+
+%% Initializations & Setup
+
+figure;
+figpos = get(gcf,'position');
+set(gcf,'position',[figpos(1),figpos(2),figpos(3)*2,figpos(4)*1.5]);
+hold on;
+ylim([0,5]);
+title('Motion Type Analysis and Categorization');
+ylabel('Analog Voltage (Volts)');
+xlabel('Time (seconds)');
+scatterPlot = scatter(time,voltage,46,zeros(length(time),3),'.');
+
+
+%% Identify the Span of each Motion Event
+% The variable motionSpans will keep track of when motion events "start" and
+% "end" in columns 1 and 2, respectively, using the index numbers.
+
+% (1) Apply basic motion detection
+motionValues = detectMotion(time,voltage);
+motionLogicals = sum(motionValues>1,2)>0;
+
+% (2) Determine the span of each basic motion event
+motionSpans = [0,0];
+for r = 1:length(time)
+    if motionLogicals(r)
+        if r == motionSpans(end,2)+1
+            motionSpans(end,2) = r;
+        else
+            motionSpans(end+1,:) = r;
+        end
+    end
+end
+motionSpans(1,:) = [];
+
+% (3) Compress motion events to remove non-critical points
+for m = 1:length(motionSpans(:,1))
+    % Start Adjustment
+    adj = 0;
+    while abs(voltage(motionSpans(m,1)-1)-voltage(motionSpans(m,1)+adj)) <= .0049
+        adj = adj+1;
+    end
+    motionSpans(m,1) = motionSpans(m,1)+adj;
+    % End Adjustment
+    adj = 0;
+    while abs(voltage(motionSpans(m,2)+1)-voltage(motionSpans(m,2)-adj)) <= .0049
+        adj = adj+1;
+    end
+    motionSpans(m,2) = motionSpans(m,2)-adj;
+end
+% Remove spans that were eliminated by the adjustments
+motionSpans(diff(motionSpans,1,2)<=0,:) = [];
+
+% (4) Combine motion events to increase clarity
+% Motion events with a small amount of time between them are combined,
+% making the categorization process more effective.
+timeThreshold = 5;
+for m = length(motionSpans(:,1)):-1:2
+    if time(motionSpans(m,1))-time(motionSpans(m-1,2)) < timeThreshold
+        motionSpans(m-1,2) = motionSpans(m,2);
+        motionSpans(m,:) = [];
+    end
+end
+
+% (5) Recolor the markers on the plot to indicate modified motion events in red
+for m = 1:length(motionSpans(:,1))
+    scatterPlot.CData(motionSpans(m,1):motionSpans(m,2),:) = repmat([1,0,0],length(motionSpans(m,1):motionSpans(m,2)),1);
+end
+
+
+%% Assign Identifiers to each Motion Event
+avgSpan = 7; % number of stable points to average
+motionDesc = cell(length(motionSpans(:,1)),5);
+for m = 1:length(motionSpans(:,1))
+    if motionSpans(m,1) > avgSpan && motionSpans(m,2) <= length(voltage)-avgSpan
+        
+        % calculate average before and after lighting
+        beforeLighting = mean(voltage(motionSpans(m,1)-avgSpan:motionSpans(m,1)-1));
+        afterLighting = mean(voltage(motionSpans(m,2)+1:motionSpans(m,2)+avgSpan));
+        
+        % lightingVariance is difference in lighting before and after an event
+        lightingVariance =  afterLighting - beforeLighting;
+        
+        % motionAverage is the mean of the lighting during a motion event
+        motionAverage = mean(voltage(motionSpans(m,1):motionSpans(m,2)));
+        
+        % motionLength is the total amount of time for a motion event in seconds
+        motionLength = time(motionSpans(m,2))-time(motionSpans(m,1));
+        
+        % Use the calculated parameters to associate the motion event with a category
+        if motionLength > 30
+            if lightingVariance > .015
+                motionDesc{m,1} = '+G    Grand Motion and Lighting Change';
+            elseif lightingVariance < -.015
+                motionDesc{m,1} = '-G    Grand Motion and Lighting Change';
+            else
+                motionDesc{m,1} = '=G    Grand Motion and No Lighting Change';
+            end
+        elseif motionLength > 10
+            if lightingVariance > .015
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+E-   Extended Positive Lighting Change and Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+E+   Extended Positive Lighting Change and Positive Motion';
+                else
+                    motionDesc{m,1} = '+E=   Extended Positive Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -.015
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-E+   Extended Negative Lighting Change and Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-E-   Extended Negative Lighting Change and Negative Motion';
+                else
+                    motionDesc{m,1} = '-E=   Extended Negative Lighting Change with No Motion';
+                end
+            else
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '=E+   Extended Positive Motion with No Lighting Change';
+                elseif motionAverage < beforeLighting
+                    motionDesc{m,1} = '=E-   Extended Negative Motion with No Lighting Change';
+                else
+                    motionDesc{m,1} = '=E=   Extended Motion with No Lighting Change';
+                end
+            end
+        else
+            if lightingVariance > 1
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+M-   Major Lighting Change with Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+M+   Major Lighting Change with Positive Motion';
+                else
+                    motionDesc{m,1} = '+M=   Major Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -1
+                 if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-M+   Major Lighting Change with Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-M-   Major Lighting Change with Negative Motion';
+                else
+                    motionDesc{m,1} = '-M=   Major Lighting Change with No Motion';
+                end
+            elseif lightingVariance > .015
+                if motionAverage < beforeLighting
+                    motionDesc{m,1} = '+C-   Combination of Positive Lighting Change and Negative Motion';
+                elseif motionAverage > afterLighting
+                    motionDesc{m,1} = '+C+   Combination of Positive Lighting Change and Positive Motion';
+                else
+                    motionDesc{m,1} = '+L=   Positive Lighting Change with No Motion';
+                end
+            elseif lightingVariance < -.015
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '-C+   Combination of Negative Lighting Change and Positive Motion';
+                elseif motionAverage < afterLighting
+                    motionDesc{m,1} = '-C-   Combination of Negative Lighting Change and Negative Motion';
+                else
+                    motionDesc{m,1} = '-L=   Negative Lighting Change with No Motion';
+                end
+            else
+                if motionAverage > beforeLighting
+                    motionDesc{m,1} = '=T+   Temporary Positive Motion with No Lighting Change';
+                elseif motionAverage < beforeLighting
+                    motionDesc{m,1} = '=T-   Temporary Negative Motion with No Lighting Change';
+                else
+                    motionDesc{m,1} = '=T=   Temporary Motion with No Lighting Change';
+                end
+            end
+        end
+        
+        % Add the indicator characters to the plot
+        text(time(motionSpans(m,1)),voltage(motionSpans(m,1))+.35,motionDesc{m}(1:3));
+        motionDesc{m,2} = beforeLighting;
+        motionDesc{m,3} = afterLighting;
+        motionDesc{m,4} = motionAverage;
+        motionDesc{m,5} = motionLength;
+    end
+end
+
+% Save motionDescription to the base workspace for access
+assignin('base','motionDescription',motionDesc);
+
+
+
+%% Basic Motion Detection Function
+    function motionValues = detectMotion(time,voltage)
+        motionValues = zeros(length(time),3);
+        
+        % Halfspan
+        halfspan = 7;
+        
+        % Thresholds
+        stdThreshold = 3*.0049;
+        diffThreshold = (halfspan*2+1)*.0049;
+        slopeThreshold = .05;
+        for rd = halfspan+1:length(voltage)-halfspan
+            motionValues(rd,1) = std(voltage(rd-halfspan:rd+halfspan))/stdThreshold;
+            motionValues(rd,2) = sum(abs(diff(voltage(rd-halfspan:rd+halfspan))))/diffThreshold;
+            getSlope = polyfit(time(rd-halfspan:rd+halfspan),voltage(rd-halfspan:rd+halfspan),1);
+            motionValues(rd,3) = abs(getSlope(1))/slopeThreshold;
+        end
+    end
+
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
